@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Lecteur arrière-plan</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;600;700&display=swap">
+<style>
+:root{--bg:#eef2f4;--card:#fff;--ink:#14212b;--mute:#5b6b76;--line:#d3dce1;--acc:#0b7a75;--accink:#fff;
+box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#0d171c;--card:#15232a;--ink:#e6eef1;--mute:#8fa3ad;--line:#25363f;--acc:#3fc1b8;--accink:#06201e}}
+:root[data-theme="dark"]{--bg:#0d171c;--card:#15232a;--ink:#e6eef1;--mute:#8fa3ad;--line:#25363f;--acc:#3fc1b8;--accink:#06201e}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:400 16px/1.45 "Instrument Sans",system-ui,sans-serif}
+main{max-width:560px;margin:0 auto;padding:16px}
+h1{font-size:20px;margin:4px 0 12px;font-weight:700}
+#ytbox iframe{width:100%;aspect-ratio:16/9;border:0;border-radius:12px;display:block;background:#000}
+video{width:100%;aspect-ratio:16/9;background:#000;border-radius:12px;display:block}
+.row{display:flex;gap:8px;margin:12px 0}
+input[type=text]{flex:1;min-width:0;padding:12px;border:1px solid var(--line);border-radius:10px;background:var(--card);color:var(--ink);font:inherit}
+button{font:inherit;font-weight:600;border:1px solid var(--line);background:var(--card);color:var(--ink);border-radius:10px;padding:12px 14px;min-height:48px;cursor:pointer}
+button:focus-visible,input:focus-visible{outline:3px solid var(--acc);outline-offset:2px}
+button.main{background:var(--acc);color:var(--accink);border-color:var(--acc)}
+.ctl{display:grid;grid-template-columns:1fr 1.4fr 1fr;gap:8px}
+.ctl button{font-size:17px}
+.seek{display:flex;align-items:center;gap:10px;margin:14px 0 4px;font-variant-numeric:tabular-nums;color:var(--mute);font-size:14px}
+input[type=range]{flex:1;accent-color:var(--acc);height:32px}
+.sub{display:flex;gap:8px}.sub button{flex:1}
+ul{list-style:none;padding:0;margin:14px 0 0}
+li{padding:12px;border:1px solid var(--line);border-radius:10px;background:var(--card);margin-bottom:6px;cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+li.on{border-color:var(--acc);font-weight:600}
+.lbl{font-weight:600;font-size:14px;color:var(--mute)}
+.note{color:var(--mute);font-size:14px;margin-top:16px}
+.err{color:#b3261e;font-size:14px;min-height:20px}
+@media (prefers-color-scheme:dark){.err{color:#ff8a80}}
+</style>
+</head>
+<body>
+<main>
+<h1>Lecteur arrière-plan</h1>
+<label for="url" class="lbl">Lien de la vidéo ou de l'audio</label>
+<div class="row" style="margin-top:6px">
+<input type="text" id="url" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="https://exemple.com/video.mp4">
+<button id="paste" title="Coller depuis le presse-papiers" aria-label="Coller">📋</button>
+</div>
+<div class="row sub" style="margin-top:0">
+<button id="go" class="main">▶ Lire ce lien</button><button id="add">+ Ajouter à la file</button>
+</div>
+<video id="v" playsinline controls></video>
+<div id="ytbox" hidden></div>
+<p class="err" id="err" role="status"></p>
+<div class="seek"><span id="cur">0:00</span><input type="range" id="bar" min="0" max="0" step="1" value="0" aria-label="Position"><span id="dur">0:00</span></div>
+<div class="ctl">
+<button id="back">⏪ 10 s</button><button id="pp" class="main">▶ Lecture</button><button id="fwd">10 s ⏩</button>
+</div>
+<div class="row sub" style="margin-top:8px">
+<button id="prev">⏮ Précédent</button><button id="speed">Vitesse 1×</button><button id="next">Suivant ⏭</button>
+</div>
+<div class="row"><button id="pick" style="flex:1">Ou ouvrir des fichiers de l'appareil</button></div>
+<input type="file" id="file" accept="video/*,audio/*" multiple hidden>
+<ul id="list"></ul>
+<p class="note">La lecture continue écran éteint ou dans une autre app, avec les boutons sur l'écran de verrouillage. Fonctionne avec les fichiers et les liens directs ; les liens YouTube sont lus dans le lecteur YouTube intégré : sur certains navigateurs, YouTube met alors la lecture en pause quand l'écran s'éteint.</p>
+</main>
+<script>
+const $=id=>document.getElementById(id), v=$('v'), box=$('ytbox');
+let q=[], i=-1, yt=null, ytAlive=false, ytTimer=0, ytT=0, ytD=0, ytPaused=true; const speeds=[1,1.25,1.5,2,0.75]; let si=0;
+const fmt=s=>{s=Math.max(0,Math.floor(s||0));return Math.floor(s/60)+':'+String(s%60).padStart(2,'0')};
+const err=m=>$('err').textContent=m||'';
+const ytId=u=>{try{const p=new URL(u),h=p.hostname.replace(/^(www|m|music)\./,'');
+if(h==='youtu.be')return p.pathname.slice(1).split('/')[0]||null;
+if(h==='youtube.com'||h==='youtube-nocookie.com'){if(p.pathname==='/watch')return p.searchParams.get('v');
+const m=p.pathname.match(/^\/(shorts|embed|live)\/([\w-]{6,})/);return m?m[2]:null}}catch{}return null};
+const cmd=(func,args)=>{if(yt)yt.contentWindow.postMessage(JSON.stringify({event:'command',func,args:args||[]}),'*')};
+const setPP=paused=>{$('pp').textContent=paused?'▶ Lecture':'⏸ Pause';if('mediaSession' in navigator)navigator.mediaSession.playbackState=paused?'paused':'playing'};
+const ui=(t,d)=>{$('bar').max=Math.floor(d)||0;$('bar').value=Math.floor(t);$('cur').textContent=fmt(t);$('dur').textContent=fmt(d);
+if('mediaSession' in navigator&&isFinite(d)&&d>0){try{navigator.mediaSession.setPositionState({duration:d,position:Math.min(t,d),playbackRate:speeds[si]})}catch{}}};
+function render(){const ul=$('list');ul.innerHTML='';q.forEach((t,n)=>{const li=document.createElement('li');li.textContent=t.title;li.tabIndex=0;if(n===i)li.className='on';
+li.onclick=()=>play(n);li.onkeydown=e=>{if(e.key==='Enter')play(n)};ul.appendChild(li)})}
+function stopYt(){box.innerHTML='';box.hidden=true;yt=null;v.hidden=false}
+function play(n){if(n<0||n>=q.length)return;i=n;err('');const it=q[n];
+if(it.yt){v.pause();v.removeAttribute('src');v.hidden=true;box.innerHTML='';box.hidden=false;ytT=0;ytD=0;ytPaused=true;ui(0,0);
+const f=document.createElement('iframe');f.allow='autoplay; encrypted-media; picture-in-picture; fullscreen';f.allowFullscreen=true;f.title='Lecteur YouTube';
+f.src='https://www.youtube-nocookie.com/embed/'+encodeURIComponent(it.yt)+'?enablejsapi=1&playsinline=1&autoplay=1&rel=0&origin='+encodeURIComponent(location.origin);
+f.onload=()=>{f.contentWindow.postMessage(JSON.stringify({event:'listening',id:1,channel:'widget'}),'*');setTimeout(()=>cmd('setPlaybackRate',[speeds[si]]),1500)};
+box.appendChild(f);yt=f;ytAlive=false;clearTimeout(ytTimer);
+ytTimer=setTimeout(()=>{if(!ytAlive)err("YouTube ne répond pas : cette page publiée bloque probablement les lecteurs YouTube. Hébergez ce fichier sur votre propre site (GitHub Pages, Netlify) ou utilisez l'app Android.")},6000);setPP(false)}
+else{stopYt();v.src=it.src;v.playbackRate=speeds[si];v.play().catch(()=>err("Lecture bloquée : touchez ▶ pour démarrer."))}
+if('mediaSession' in navigator)navigator.mediaSession.metadata=new MediaMetadata({title:it.title,artist:'Lecteur arrière-plan'});render()}
+function add(u,title,go){const id=ytId(u);q.push(id?{yt:id,title:'YouTube · '+id}:{src:u,title});if(go||i<0)play(q.length-1);else render()}
+const getUrl=()=>{const u=$('url').value.trim();if(!u){err("Collez un lien vers une vidéo (YouTube ou fichier direct).");return null}
+try{new URL(u)}catch{err("Ce lien n'est pas valide. Il doit commencer par https://");return null}
+if(/youtu/.test(u)&&!ytId(u)){err("Lien YouTube non reconnu. Collez le lien d'une vidéo (watch?v=…, youtu.be/…, shorts/…).");return null}
+return u};
+const submit=go=>{const u=getUrl();if(!u)return;add(u,decodeURIComponent(u.split('?')[0].split('/').pop()||u),go);$('url').value=''};
+$('go').onclick=()=>submit(true);$('add').onclick=()=>submit(false);
+$('url').onkeydown=e=>{if(e.key==='Enter')submit(true)};
+$('paste').onclick=async()=>{try{$('url').value=(await navigator.clipboard.readText()).trim();$('url').focus()}catch{err("Collez le lien manuellement dans le champ.")}};
+$('pick').onclick=()=>$('file').click();
+$('file').onchange=e=>{const fs=[...e.target.files];fs.forEach((f,k)=>add(URL.createObjectURL(f),f.name,k===0));e.target.value=''};
+const doPlay=()=>yt?cmd('playVideo'):v.play().catch(()=>{});
+const doPause=()=>yt?cmd('pauseVideo'):v.pause();
+const seekTo=t=>{t=Math.max(0,t);if(yt){cmd('seekTo',[t,true]);ytT=t}else v.currentTime=Math.min(v.duration||1e9,t)};
+const seek=d=>seekTo((yt?ytT:v.currentTime)+d);
+const toggle=()=>(yt?ytPaused:v.paused)?doPlay():doPause();
+$('pp').onclick=toggle;$('back').onclick=()=>seek(-10);$('fwd').onclick=()=>seek(10);
+$('prev').onclick=()=>play(i-1);$('next').onclick=()=>play(i+1);
+$('speed').onclick=()=>{si=(si+1)%speeds.length;if(yt)cmd('setPlaybackRate',[speeds[si]]);else v.playbackRate=speeds[si];$('speed').textContent='Vitesse '+speeds[si]+'×'};
+$('bar').oninput=e=>seekTo(+e.target.value);
+v.onplay=v.onpause=()=>{if(!yt)setPP(v.paused)};
+v.onloadedmetadata=()=>ui(0,v.duration);
+v.ontimeupdate=()=>{if(!yt)ui(v.currentTime,v.duration)};
+v.onended=()=>{if(i<q.length-1)play(i+1)};
+v.onerror=()=>{if(v.getAttribute('src'))err("Impossible de lire ce média. Vérifiez que c'est un lien direct vers un fichier.")};
+window.addEventListener('message',e=>{if(!yt||e.source!==yt.contentWindow)return;ytAlive=true;err('');let d;try{d=JSON.parse(e.data)}catch{return}
+if(d.event==='infoDelivery'&&d.info){const f=d.info;if(typeof f.currentTime==='number')ytT=f.currentTime;if(typeof f.duration==='number')ytD=f.duration;
+if(typeof f.playerState==='number'){ytPaused=f.playerState!==1&&f.playerState!==3;setPP(ytPaused);if(f.playerState===0&&i<q.length-1)play(i+1)}ui(ytT,ytD)}
+if(d.event==='onError')err("YouTube refuse la lecture de cette vidéo ici (intégration désactivée par son auteur).")});
+if('mediaSession' in navigator){const ms=navigator.mediaSession,h=(a,f)=>{try{ms.setActionHandler(a,f)}catch{}};
+h('play',doPlay);h('pause',doPause);h('seekbackward',d=>seek(-(d.seekOffset||10)));h('seekforward',d=>seek(d.seekOffset||10));
+h('previoustrack',()=>play(i-1));h('nexttrack',()=>play(i+1));h('seekto',d=>seekTo(d.seekTime))}
+</script>
+</body>
+</html>
